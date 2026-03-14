@@ -61,6 +61,19 @@ class Settings(BaseSettings):
         description="Name shown to MCP clients that inspect the server.",
     )
 
+    # ------------------------------------------------------------------
+    # Multi-user
+    # ------------------------------------------------------------------
+    current_user_name: str = Field(
+        default="default",
+        description=(
+            "Active user profile name.  Determines which token-cache file is "
+            "loaded on startup (`.cache` for 'default', `.cache-<name>` for "
+            "all others).  Override via the CURRENT_USER_NAME env var or the "
+            "switch_user MCP tool at runtime."
+        ),
+    )
+
 
 # Singleton – import this everywhere instead of instantiating Settings().
 settings = Settings()

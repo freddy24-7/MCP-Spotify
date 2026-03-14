@@ -40,7 +40,11 @@ SCOPES = (
     "user-read-playback-state "
     "user-modify-playback-state "
     "playlist-read-private "
-    "playlist-read-collaborative"
+    "playlist-read-collaborative "
+    "playlist-modify-private "
+    "playlist-modify-public "
+    "user-read-recently-played "
+    "user-top-read"
 )
 
 if not CLIENT_ID or CLIENT_ID == "your_client_id_here":
