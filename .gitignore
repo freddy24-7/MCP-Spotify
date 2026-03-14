@@ -1,0 +1,16 @@
+# Secrets – never commit
+.env
+.env.local
+
+# Spotify OAuth token cache
+.cache
+.cache-*
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# uv
+.python-version

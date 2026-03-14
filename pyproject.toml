@@ -1,0 +1,10 @@
+[project]
+name = "spotify-mcp-server"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.10"
+dependencies = [
+    "fastmcp>=3.1.0",
+    "python-dotenv>=1.2.2",
+    "spotipy>=2.26.0",
+]
