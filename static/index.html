@@ -402,6 +402,11 @@
       }
     }
 
+    async function callTool(name, args = {}) {
+      if (!client) throw new Error('Not connected');
+      return client.callTool(name, args);
+    }
+
     function startRefresh() {
       clearInterval(refreshTimer);
       refreshTimer = setInterval(refreshNowPlaying, 5000);
