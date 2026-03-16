@@ -101,7 +101,7 @@ def _build_auth_manager(user: str) -> SpotifyOAuth:
 
 def get_spotify_client() -> spotipy.Spotify:
     """Return an authenticated Spotify client for the current user."""
-    return spotipy.Spotify(auth_manager=_build_auth_manager(_current_user))
+    return spotipy.Spotify(auth_manager=_build_auth_manager(_current_user), retries=0)
 
 
 def _uri_to_id(uri_or_id: str) -> str:
@@ -801,18 +801,23 @@ def generate_playlist(prompt: str, playlist_name: str = "") -> dict[str, Any]:
     playlist = sp.current_user_playlist_create(name=final_name, public=False)
     pid = playlist["id"]
 
+    import time as _time
     added, not_found = [], []
+    uris_to_add = []
     for t in data.get("tracks", []):
         query = f"{t.get('title', '')} {t.get('artist', '')}".strip()
+        _time.sleep(0.3)
         results = sp.search(q=query, type="track", limit=1)
         items = results.get("tracks", {}).get("items", [])
         if items:
-            sp.playlist_add_items(pid, [items[0]["uri"]])
+            uris_to_add.append(items[0]["uri"])
             added.append(items[0]["name"])
-            log.info("generate_playlist: added '%s'", items[0]["name"])
+            log.info("generate_playlist: found '%s'", items[0]["name"])
         else:
             not_found.append(query)
             log.warning("generate_playlist: not found '%s'", query)
+    if uris_to_add:
+        sp.playlist_add_items(pid, uris_to_add)
 
     return {
         "playlist_id": pid,
