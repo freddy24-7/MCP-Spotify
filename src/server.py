@@ -493,7 +493,7 @@ def get_user_playlists(limit: int = 20, offset: int = 0) -> dict[str, Any]:
             "id": p["id"],
             "name": p["name"],
             "owner": (p.get("owner") or {}).get("display_name", ""),
-            "tracks_total": (p.get("tracks") or {}).get("total", 0),
+            "tracks_total": (p.get("tracks") or {}).get("total") or 0,
             "public": p.get("public"),
             "url": (p.get("external_urls") or {}).get("spotify", ""),
         }
@@ -1047,10 +1047,10 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
     transport = os.environ.get("MCP_TRANSPORT", "stdio")
 
-    if transport == "sse":
-        log.info("Starting SSE server on 0.0.0.0:%d /mcp", port)
+    if transport in ("sse", "http", "streamable-http"):
+        log.info("Starting streamable-HTTP server on 0.0.0.0:%d /mcp", port)
         mcp.run(
-            transport="sse",
+            transport="streamable-http",
             host="0.0.0.0",
             port=port,
             path="/mcp",

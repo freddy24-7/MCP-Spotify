@@ -355,66 +355,58 @@
   <div id="toast"></div>
 
   <script>
-    // ── Lightweight MCP-over-SSE client (no SDK dependency) ────────────────
-    // Implements the MCP SSE transport spec:
-    //   1. GET /mcp  → SSE stream; server emits an 'endpoint' event with POST URL
-    //   2. POST to that URL with JSON-RPC 2.0 messages
-    //   3. Responses arrive as 'message' SSE events on the same stream
+    // ── Streamable-HTTP MCP client ──────────────────────────────────────────
+    // Each call is a plain POST to /mcp returning JSON (or SSE-wrapped JSON).
+    // Railway's proxy drops long-lived SSE streams, so we avoid EventSource.
     class MCPClient {
-      constructor(sseUrl) {
-        this._sseUrl  = sseUrl;
-        this._postUrl = null;
-        this._es      = null;
-        this._pending = new Map();
-        this._id      = 0;
+      constructor(url) {
+        this._url       = url;
+        this._sessionId = null;
+        this._id        = 0;
       }
-      connect() {
-        return new Promise((resolve, reject) => {
-          const t = setTimeout(() => reject(new Error('SSE connect timeout')), 10000);
-          this._es = new EventSource(this._sseUrl);
-          this._es.addEventListener('endpoint', async (e) => {
-            clearTimeout(t);
-            this._postUrl = new URL(e.data, window.location.origin).href;
-            try {
-              await this._request('initialize', {
-                protocolVersion: '2024-11-05',
-                capabilities: {},
-                clientInfo: { name: 'spotify-web-app', version: '1.0.0' }
-              });
-              this._post({ jsonrpc: '2.0', method: 'notifications/initialized', params: {} });
-              resolve();
-            } catch (err) { reject(err); }
-          });
-          this._es.addEventListener('message', (e) => {
-            try {
-              const msg = JSON.parse(e.data);
-              if (msg.id != null && this._pending.has(msg.id)) {
-                const { res, rej } = this._pending.get(msg.id);
-                this._pending.delete(msg.id);
-                msg.error ? rej(new Error(msg.error.message || JSON.stringify(msg.error))) : res(msg.result);
-              }
-            } catch (_) {}
-          });
-          this._es.onerror = () => { clearTimeout(t); reject(new Error('SSE error')); };
+      async connect() {
+        await this._request('initialize', {
+          protocolVersion: '2024-11-05',
+          capabilities: {},
+          clientInfo: { name: 'spotify-web-app', version: '1.0.0' }
         });
+        this._notify('notifications/initialized', {});
       }
-      _request(method, params) {
+      async _request(method, params) {
         const id = ++this._id;
-        return new Promise((res, rej) => {
-          const t = setTimeout(() => { this._pending.delete(id); rej(new Error('Timeout: ' + method)); }, 15000);
-          this._pending.set(id, {
-            res: (r) => { clearTimeout(t); res(r); },
-            rej: (e) => { clearTimeout(t); rej(e); }
-          });
-          this._post({ jsonrpc: '2.0', id, method, params });
-        });
-      }
-      async _post(body) {
-        await fetch(this._postUrl, {
+        const headers = {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json, text/event-stream'
+        };
+        if (this._sessionId) headers['Mcp-Session-Id'] = this._sessionId;
+        const resp = await fetch(this._url, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body)
+          headers,
+          body: JSON.stringify({ jsonrpc: '2.0', id, method, params })
         });
+        const sid = resp.headers.get('Mcp-Session-Id');
+        if (sid) this._sessionId = sid;
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        const text = await resp.text();
+        // FastMCP may wrap responses in SSE format; unwrap if needed.
+        let data;
+        if (text.trimStart().startsWith('{')) {
+          data = JSON.parse(text);
+        } else {
+          const match = text.match(/^data:\s*(.+)$/m);
+          if (!match) throw new Error('Unrecognised server response: ' + text.slice(0, 80));
+          data = JSON.parse(match[1]);
+        }
+        if (data.error) throw new Error(data.error.message || JSON.stringify(data.error));
+        return data.result;
+      }
+      _notify(method, params) {
+        const headers = { 'Content-Type': 'application/json' };
+        if (this._sessionId) headers['Mcp-Session-Id'] = this._sessionId;
+        fetch(this._url, {
+          method: 'POST', headers,
+          body: JSON.stringify({ jsonrpc: '2.0', method, params })
+        }).catch(() => {});
       }
       async callTool(name, args = {}) {
         const result = await this._request('tools/call', { name, arguments: args });
@@ -423,7 +415,6 @@
         if (result?.isError) throw new Error(text);
         try { return JSON.parse(text); } catch { throw new Error(text); }
       }
-      close() { this._es && this._es.close(); }
     }
 
     // ── State ──────────────────────────────────────────────────────────────
