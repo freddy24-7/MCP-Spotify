@@ -3,7 +3,7 @@ Spotify MCP Server
 ==================
 A FastMCP 3.0 server that exposes Spotify controls as Model Context Protocol tools.
 
-Transport : stdio (default) – configure via fastmcp.json
+Transport : SSE (production) / stdio (local dev) – see entry point below.
 Auth      : Spotify OAuth 2.0 with automatic token refresh via spotipy.
 """
 
@@ -17,21 +17,25 @@ from typing import Any
 import spotipy
 from fastmcp import FastMCP
 from spotipy.oauth2 import SpotifyOAuth
+from starlette.requests import Request
+from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse
 
-# Ensure the project root is on sys.path so `config.settings` is importable
-# regardless of the working directory chosen by the MCP host.
+# ---------------------------------------------------------------------------
+# Ensure project root is importable regardless of launch CWD
+# ---------------------------------------------------------------------------
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
-from config.settings import settings  # noqa: E402  (import after path fix)
+from config.settings import settings  # noqa: E402
 
 # ---------------------------------------------------------------------------
-# Logging
+# Logging – all output goes to stderr so it never pollutes the SSE stream
 # ---------------------------------------------------------------------------
 logging.basicConfig(
     level=getattr(logging, settings.log_level.upper(), logging.INFO),
     format="%(levelname)s | %(name)s | %(message)s",
+    stream=sys.stderr,
 )
 log = logging.getLogger("spotify-mcp")
 
@@ -53,25 +57,24 @@ SPOTIFY_SCOPES: str = (
 # Multi-user auth state
 # ---------------------------------------------------------------------------
 
-# Name of the currently active user profile.  Mutated by switch_user().
 _current_user: str = settings.current_user_name
-
-# Per-user SpotifyOAuth managers built lazily; keyed by profile name.
 _auth_managers: dict[str, SpotifyOAuth] = {}
 
 
 def _cache_path_for(user: str) -> str:
-    """Return the absolute path to the token-cache file for *user*."""
+    """Return the absolute path to the token-cache file for *user*.
+
+    Checks ``SPOTIFY_CACHE_DIR`` first so Railway volumes can be mounted
+    at a persistent path (e.g. ``/data``).
+    """
+    cache_dir = os.environ.get("SPOTIFY_CACHE_DIR", _PROJECT_ROOT)
     filename = ".cache" if user == "default" else f".cache-{user}"
-    return os.path.join(_PROJECT_ROOT, filename)
+    return os.path.join(cache_dir, filename)
 
 
 def _build_auth_manager(user: str) -> SpotifyOAuth:
     """
     Return (or lazily build) a ``SpotifyOAuth`` manager for *user*.
-
-    Each user gets their own manager pointing at a distinct cache file so
-    tokens never collide across profiles.
 
     Raises
     ------
@@ -96,18 +99,12 @@ def _build_auth_manager(user: str) -> SpotifyOAuth:
 
 
 def get_spotify_client() -> spotipy.Spotify:
-    """
-    Return an authenticated ``spotipy.Spotify`` instance for the current user.
-
-    Token refresh is handled transparently by the underlying SpotifyOAuth
-    manager – every call through this client will use a valid access token.
-    """
+    """Return an authenticated Spotify client for the current user."""
     return spotipy.Spotify(auth_manager=_build_auth_manager(_current_user))
 
 
 def _uri_to_id(uri_or_id: str) -> str:
     """Extract the bare Spotify ID from a full URI, or return as-is."""
-    # "spotify:track:4iV5W9uYEdYUVa79Axb7Rh" → "4iV5W9uYEdYUVa79Axb7Rh"
     return uri_or_id.split(":")[-1] if ":" in uri_or_id else uri_or_id
 
 
@@ -125,6 +122,90 @@ mcp = FastMCP(
 )
 
 # ---------------------------------------------------------------------------
+# Health check (Railway probe + general liveness)
+# ---------------------------------------------------------------------------
+
+
+@mcp.custom_route("/health", methods=["GET"])
+async def health_check(request: Request) -> JSONResponse:
+    """Liveness probe used by Railway and other deployment platforms."""
+    return JSONResponse({"status": "ok", "service": settings.server_name})
+
+
+@mcp.custom_route("/auth/login", methods=["GET"])
+async def auth_login(request: Request) -> RedirectResponse:
+    """
+    Start the Spotify OAuth flow.
+
+    Visit this URL in a browser to authorise the server.  Spotify will
+    redirect back to ``/callback`` with an authorisation code.
+    """
+    user = request.query_params.get("user", _current_user)
+    auth_manager = _build_auth_manager(user)
+    auth_url = auth_manager.get_authorize_url()
+    log.info("auth_login: redirecting user=%s to Spotify", user)
+    return RedirectResponse(url=auth_url)
+
+
+@mcp.custom_route("/callback", methods=["GET"])
+async def auth_callback(request: Request) -> HTMLResponse:
+    """
+    Handle the Spotify OAuth redirect and persist the token cache.
+
+    Spotify calls this URL after the user approves access.  The
+    authorisation code is exchanged for an access/refresh token pair
+    which spotipy writes to the cache file automatically.
+    """
+    error = request.query_params.get("error")
+    if error:
+        log.error("auth_callback: Spotify returned error=%s", error)
+        return HTMLResponse(
+            f"<h2>Authorisation failed</h2><p>Spotify error: <code>{error}</code></p>",
+            status_code=400,
+        )
+
+    code = request.query_params.get("code")
+    if not code:
+        return HTMLResponse(
+            "<h2>Authorisation failed</h2><p>No code in callback.</p>",
+            status_code=400,
+        )
+
+    user = request.query_params.get("state", _current_user)
+    # SpotifyOAuth uses 'state' for CSRF by default; we read it as a
+    # best-effort user hint but fall back to _current_user safely.
+    try:
+        auth_manager = _build_auth_manager(_current_user)
+        auth_manager.get_access_token(code, as_dict=False, check_cache=False)
+        log.info("auth_callback: token cached for user=%s", _current_user)
+    except Exception as exc:
+        log.exception("auth_callback: token exchange failed")
+        return HTMLResponse(
+            f"<h2>Token exchange failed</h2><pre>{exc}</pre>",
+            status_code=500,
+        )
+
+    return HTMLResponse("""
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><title>Spotify Authorised</title>
+<style>
+  body{font-family:sans-serif;display:flex;align-items:center;
+       justify-content:center;height:100vh;background:#121212;color:#fff}
+  .card{text-align:center;padding:40px;border-radius:16px;background:#1a1a1a}
+  h2{color:#1db954}
+</style></head>
+<body>
+  <div class="card">
+    <h2>✓ Spotify connected!</h2>
+    <p>Token saved. You can close this tab.</p>
+    <p style="color:#666;font-size:13px">The MCP server is ready to use.</p>
+  </div>
+</body>
+</html>""")
+
+
+# ---------------------------------------------------------------------------
 # Playback tools
 # ---------------------------------------------------------------------------
 
@@ -134,8 +215,7 @@ def get_current_track() -> dict[str, Any]:
     """
     Retrieve information about the track currently playing on Spotify.
 
-    Queries the active Spotify device for the currently playing item and
-    returns structured metadata including the track URI, which is needed by
+    Returns structured metadata including the track URI, which is needed by
     other tools such as ``add_to_queue`` and ``get_recommendations``.
 
     Returns
@@ -143,8 +223,7 @@ def get_current_track() -> dict[str, Any]:
     dict
         Keys: ``is_playing``, ``track_name``, ``artists``, ``album``,
         ``duration_ms``, ``progress_ms``, ``track_url``, ``track_uri``.
-        Returns ``{"is_playing": False}`` when nothing is playing or no
-        active device is found.
+        Returns ``{"is_playing": False}`` when nothing is playing.
 
     Raises
     ------
@@ -181,10 +260,6 @@ def play_pause(action: str = "toggle") -> dict[str, str]:
     action : str, optional
         One of ``"play"``, ``"pause"``, or ``"toggle"`` (default).
 
-        - ``"play"``   – Resume or start playback on the active device.
-        - ``"pause"``  – Pause playback on the active device.
-        - ``"toggle"`` – Pause if currently playing; play if currently paused.
-
     Returns
     -------
     dict
@@ -209,7 +284,6 @@ def play_pause(action: str = "toggle") -> dict[str, str]:
         return {"status": "no_active_device"}
 
     currently_playing = playback.get("is_playing", False)
-
     if action == "toggle":
         action = "pause" if currently_playing else "play"
 
@@ -303,32 +377,22 @@ def get_recommendations(seed_tracks: list[str], limit: int = 5) -> dict[str, Any
     """
     Fetch track recommendations based on a list of seed track URIs or IDs.
 
-    Uses the Spotify recommendations endpoint to suggest tracks sonically
-    similar to the seeds – useful for building radio-style queues or
-    auto-filling a new playlist.
-
     Note
     ----
     Spotify deprecated the public recommendations endpoint in November 2024.
-    This tool works for apps created before that date or granted continued
-    access by Spotify.
+    This tool works for apps created before that date or granted continued access.
 
     Parameters
     ----------
     seed_tracks : list[str]
-        Spotify track URIs or bare IDs to seed from.  The API accepts at most
-        5 seeds; excess values are silently truncated.
+        Spotify track URIs or bare IDs (max 5 seeds; excess are truncated).
     limit : int, optional
         Number of recommendations to return (1–100, default: 5).
 
     Returns
     -------
     dict
-        Keys:
-
-        - ``seeds`` (list[str]): Track IDs actually sent to the API.
-        - ``tracks`` (list[dict]): Each entry has ``track_name``, ``artists``,
-          ``track_uri``, ``track_url``.
+        Keys: ``seeds`` (list[str]), ``tracks`` (list[dict]).
 
     Raises
     ------
@@ -381,8 +445,6 @@ def get_user_playlists(limit: int = 20, offset: int = 0) -> dict[str, Any]:
     -------
     dict
         Keys: ``total``, ``limit``, ``offset``, ``playlists``.
-        Each playlist entry has: ``id``, ``name``, ``owner``,
-        ``tracks_total``, ``public``, ``url``.
 
     Raises
     ------
@@ -426,7 +488,7 @@ def create_playlist(name: str, description: str = "") -> dict[str, Any]:
     Parameters
     ----------
     name : str
-        Display name for the new playlist.  Must not be blank.
+        Display name for the new playlist.
     description : str, optional
         Short description shown in Spotify clients (default: empty string).
 
@@ -465,15 +527,14 @@ def add_to_playlist(playlist_id: str, track_uris: list[str]) -> dict[str, Any]:
     """
     Add one or more tracks to an existing Spotify playlist.
 
-    Handles batching automatically: the Spotify API limits each request to
-    100 tracks, so larger lists are split into sequential calls.
+    Handles batching automatically (Spotify API limit: 100 tracks per request).
 
     Parameters
     ----------
     playlist_id : str
         Spotify playlist ID or full URI.
     track_uris : list[str]
-        Spotify track URIs (``spotify:track:<id>``) or bare track IDs.
+        Spotify track URIs or bare track IDs.
 
     Returns
     -------
@@ -494,7 +555,7 @@ def add_to_playlist(playlist_id: str, track_uris: list[str]) -> dict[str, Any]:
     full_uris = [f"spotify:track:{_uri_to_id(u)}" for u in track_uris]
 
     sp = get_spotify_client()
-    for i in range(0, len(full_uris), 100):  # API max: 100 per request
+    for i in range(0, len(full_uris), 100):
         sp.playlist_add_items(pid, full_uris[i : i + 100])
 
     log.info("add_to_playlist: added %d track(s) to %s", len(full_uris), pid)
@@ -505,10 +566,6 @@ def add_to_playlist(playlist_id: str, track_uris: list[str]) -> dict[str, Any]:
 def search_and_add(query: str, playlist_id: str) -> dict[str, Any]:
     """
     Search for a track and add the top result to a playlist in one step.
-
-    Combines a Spotify track search with a playlist-add so the agent can
-    fulfil requests like "add Shape of You to my Chill Mix" without a
-    separate search step.
 
     Parameters
     ----------
@@ -565,20 +622,14 @@ def switch_user(name: str) -> dict[str, str]:
     Switch the active Spotify user profile.
 
     Updates the server's internal state so all subsequent tool calls use the
-    token cache for *name*.  Each user's token is stored in a separate file
-    (``.cache-<name>`` in the project root), enabling seamless switching
-    between family or shared accounts without re-authentication — provided
-    the cache file for *name* already exists.
-
-    This is the groundwork for multi-user support when the server is deployed
-    to a remote host such as Railway.
+    token cache for *name*.  Each user's token lives in ``.cache-<name>`` in
+    the project root; pass ``"default"`` to return to the primary account.
 
     Parameters
     ----------
     name : str
-        User profile name.  Pass ``"default"`` to return to the primary
-        account.  Any other value must have a corresponding ``.cache-<name>``
-        file in the project root (created by a prior OAuth login).
+        User profile name.  Must have a corresponding cache file or be
+        ``"default"``.
 
     Returns
     -------
@@ -588,7 +639,7 @@ def switch_user(name: str) -> dict[str, str]:
     Raises
     ------
     ValueError
-        If ``name`` is blank, or if no token cache exists for that profile.
+        If ``name`` is blank or no token cache exists for that profile.
     """
     global _current_user
 
@@ -610,25 +661,22 @@ def switch_user(name: str) -> dict[str, str]:
 
 
 # ---------------------------------------------------------------------------
-# Resource: interactive now-playing UI card
+# Resource: now-playing plain card (stdio / Inspector)
 # ---------------------------------------------------------------------------
 
 
 @mcp.resource("ui://now-playing")
 def now_playing_ui() -> str:
     """
-    An HTML snippet showing the current track with interactive control buttons.
+    HTML snippet showing the current track with Skip / Play / Queue buttons.
 
-    Returns a self-contained card with Skip, Play/Pause, and Queue buttons.
-    Buttons carry ``data-mcp-tool`` / ``data-mcp-args`` attributes so a thin
-    client (mobile app, web shell) can dispatch the corresponding MCP tool
-    calls without custom JavaScript.
+    Buttons carry ``data-mcp-tool`` / ``data-mcp-args`` attributes for thin
+    clients that can dispatch MCP tool calls directly from the DOM.
 
     Returns
     -------
     str
-        Self-contained HTML fragment with inline CSS.  Returns a plain
-        ``<p>`` element when nothing is playing.
+        Self-contained HTML fragment with inline CSS.
     """
     sp = get_spotify_client()
     playback = sp.current_playback()
@@ -647,7 +695,6 @@ def now_playing_ui() -> str:
     track_uri = item.get("uri", "")
     is_playing = playback.get("is_playing", False)
     play_label = "⏸ Pause" if is_playing else "▶ Play"
-
     art_html = f'<img src="{art_url}" style="width:100%;display:block">' if art_url else ""
 
     return f"""
@@ -660,23 +707,17 @@ def now_playing_ui() -> str:
     <div style="font-size:14px;color:#b3b3b3">{artists}</div>
     <div style="font-size:12px;color:#666;margin-top:2px">{album}</div>
     <div style="display:flex;gap:10px;margin-top:16px">
-      <button
-        data-mcp-tool="play_pause"
-        data-mcp-args='{{"action":"toggle"}}'
+      <button data-mcp-tool="play_pause" data-mcp-args='{{"action":"toggle"}}'
         style="flex:1;padding:10px;border:none;border-radius:8px;
                background:#1db954;color:#fff;font-weight:700;cursor:pointer">
         {play_label}
       </button>
-      <button
-        data-mcp-tool="skip_track"
-        data-mcp-args='{{"direction":"next"}}'
+      <button data-mcp-tool="skip_track" data-mcp-args='{{"direction":"next"}}'
         style="flex:1;padding:10px;border:none;border-radius:8px;
                background:#333;color:#fff;font-weight:700;cursor:pointer">
         ⏭ Skip
       </button>
-      <button
-        data-mcp-tool="add_to_queue"
-        data-mcp-args='{{"uri":"{track_uri}"}}'
+      <button data-mcp-tool="add_to_queue" data-mcp-args='{{"uri":"{track_uri}"}}'
         style="flex:1;padding:10px;border:none;border-radius:8px;
                background:#333;color:#fff;font-weight:700;cursor:pointer">
         ＋ Queue
@@ -688,10 +729,170 @@ def now_playing_ui() -> str:
 
 
 # ---------------------------------------------------------------------------
+# Resource: interactive mini-player (SSE / Railway)
+# ---------------------------------------------------------------------------
+
+
+@mcp.resource("ui://spotify-mini-player")
+def spotify_mini_player() -> str:
+    """
+    A fully interactive now-playing card for SSE-connected clients.
+
+    Includes the MCP JS SDK so the Play/Pause, Skip, and Queue buttons
+    dispatch real tool calls back to this server over the active SSE
+    connection.  The ``_meta`` block advertises a dependency on
+    ``get_current_track`` so MCP clients can refresh the card when
+    playback changes.
+
+    Returns
+    -------
+    str
+        Self-contained HTML page with inline CSS and embedded JS.
+    """
+    sp = get_spotify_client()
+    playback = sp.current_playback()
+
+    if not playback or not playback.get("item"):
+        track_name, artists, album, art_url, track_uri = (
+            "Nothing playing", "", "", "", ""
+        )
+        is_playing = False
+    else:
+        item = playback["item"]
+        track_name = item.get("name", "Unknown")
+        artists = ", ".join(a["name"] for a in item.get("artists", []))
+        album = item.get("album", {}).get("name", "")
+        art_url = (item.get("album", {}).get("images") or [{}])[0].get("url", "")
+        track_uri = item.get("uri", "")
+        is_playing = playback.get("is_playing", False)
+
+    play_label = "⏸ Pause" if is_playing else "▶ Play"
+    art_html = f'<img id="art" src="{art_url}" style="width:100%;display:block">' if art_url else ""
+
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Spotify Mini Player</title>
+  <!-- MCP JS SDK – enables mcp.callTool() from the browser -->
+  <script src="https://cdn.jsdelivr.net/npm/@modelcontextprotocol/sdk/dist/browser/index.js"></script>
+  <style>
+    * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+    body {{
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #121212; color: #fff;
+      display: flex; align-items: center; justify-content: center;
+      min-height: 100vh;
+    }}
+    #card {{
+      width: 340px; border-radius: 16px; overflow: hidden;
+      box-shadow: 0 8px 32px rgba(0,0,0,.5); background: #1a1a1a;
+    }}
+    #info {{ padding: 16px; }}
+    #track  {{ font-size: 18px; font-weight: 700; margin-bottom: 4px; }}
+    #artist {{ font-size: 14px; color: #b3b3b3; }}
+    #album  {{ font-size: 12px; color: #555; margin-top: 2px; }}
+    #controls {{ display: flex; gap: 8px; margin-top: 16px; }}
+    button {{
+      flex: 1; padding: 11px 8px; border: none; border-radius: 10px;
+      font-weight: 700; font-size: 13px; cursor: pointer; transition: opacity .15s;
+    }}
+    button:hover {{ opacity: .85; }}
+    button:disabled {{ opacity: .4; cursor: default; }}
+    #btn-play  {{ background: #1db954; color: #fff; }}
+    #btn-skip  {{ background: #2a2a2a; color: #fff; }}
+    #btn-queue {{ background: #2a2a2a; color: #fff; }}
+    #status {{
+      font-size: 11px; color: #666; text-align: center;
+      padding: 10px 16px; min-height: 30px;
+    }}
+  </style>
+</head>
+<body>
+  <div id="card">
+    {art_html}
+    <div id="info">
+      <div id="track">{track_name}</div>
+      <div id="artist">{artists}</div>
+      <div id="album">{album}</div>
+      <div id="controls">
+        <button id="btn-play"  onclick="callTool('play_pause',  {{action:'toggle'}})">{play_label}</button>
+        <button id="btn-skip"  onclick="callTool('skip_track',  {{direction:'next'}})">⏭ Skip</button>
+        <button id="btn-queue" onclick="callTool('add_to_queue',{{uri:TRACK_URI}})">＋ Queue</button>
+      </div>
+    </div>
+    <div id="status">Ready</div>
+  </div>
+
+  <script>
+    // Current track URI injected server-side; buttons close over it.
+    const TRACK_URI = {repr(track_uri)};
+
+    // _meta: advertise dependency on get_current_track so MCP clients
+    // can trigger a resource refresh when playback state changes.
+    const _meta = {{
+      resourceDependencies: ["tool://get_current_track"],
+      refreshOnToolCall: ["play_pause", "skip_track", "add_to_queue"],
+    }};
+
+    let mcp = null;
+
+    async function initMCP() {{
+      // Connect to the SSE endpoint on the same origin.
+      const serverUrl = window.location.origin + "/mcp";
+      try {{
+        // @modelcontextprotocol/sdk ≥ 1.x browser bundle exposes MCPClient
+        mcp = new MCPClient({{ transport: "sse", url: serverUrl }});
+        await mcp.connect();
+        setStatus("Connected to Spotify MCP");
+      }} catch (e) {{
+        setStatus("MCP not connected — buttons will no-op (" + e.message + ")");
+      }}
+    }}
+
+    async function callTool(toolName, args) {{
+      if (!mcp) {{ setStatus("Not connected"); return; }}
+      setStatus("Calling " + toolName + "…");
+      setButtons(true);
+      try {{
+        const result = await mcp.callTool(toolName, args);
+        setStatus("✓ " + JSON.stringify(result?.content?.[0]?.text ?? result));
+      }} catch (e) {{
+        setStatus("✗ " + e.message);
+      }} finally {{
+        setButtons(false);
+      }}
+    }}
+
+    function setStatus(msg) {{ document.getElementById("status").textContent = msg; }}
+    function setButtons(disabled) {{
+      ["btn-play","btn-skip","btn-queue"].forEach(id => {{
+        document.getElementById(id).disabled = disabled;
+      }});
+    }}
+
+    initMCP();
+  </script>
+</body>
+</html>""".strip()
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    # Running directly → stdio transport (matches fastmcp.json config).
-    # Use `fastmcp run src/server.py` for the standard launcher.
-    mcp.run(transport="stdio")
+    port = int(os.environ.get("PORT", 8000))
+    transport = os.environ.get("MCP_TRANSPORT", "stdio")
+
+    if transport == "sse":
+        log.info("Starting SSE server on 0.0.0.0:%d /mcp", port)
+        mcp.run(
+            transport="sse",
+            host="0.0.0.0",
+            port=port,
+            path="/mcp",
+        )
+    else:
+        mcp.run(transport="stdio")
