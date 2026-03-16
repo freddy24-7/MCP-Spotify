@@ -781,7 +781,7 @@ def generate_playlist(prompt: str, playlist_name: str = "") -> dict[str, Any]:
         )
 
     genai.configure(api_key=settings.gemini_api_key)
-    model = genai.GenerativeModel("gemini-2.0-flash")
+    model = genai.GenerativeModel("gemini-2.0-flash-lite")
 
     user_msg = (
         "You are a music curator. Return ONLY a JSON object with two keys:\n"
