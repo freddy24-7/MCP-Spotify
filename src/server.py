@@ -14,7 +14,7 @@ import os
 import sys
 from typing import Any
 
-import google.generativeai as genai
+from google import genai as google_genai
 import spotipy
 from fastmcp import FastMCP
 from spotipy.oauth2 import SpotifyOAuth
@@ -780,8 +780,7 @@ def generate_playlist(prompt: str, playlist_name: str = "") -> dict[str, Any]:
             "GEMINI_API_KEY is not set. Add it to Railway environment variables."
         )
 
-    genai.configure(api_key=settings.gemini_api_key)
-    model = genai.GenerativeModel("gemini-2.5-flash-preview-04-17")
+    ai_client = google_genai.Client(api_key=settings.gemini_api_key)
 
     user_msg = (
         "You are a music curator. Return ONLY a JSON object with two keys:\n"
@@ -794,7 +793,10 @@ def generate_playlist(prompt: str, playlist_name: str = "") -> dict[str, Any]:
         user_msg += f'\nPlaylist name: "{playlist_name.strip()}"'
 
     log.info("generate_playlist: calling Gemini for prompt=%r", prompt)
-    response = model.generate_content(user_msg)
+    response = ai_client.models.generate_content(
+        model="gemini-2.5-flash-lite-preview-06-17",
+        contents=user_msg,
+    )
 
     import json as _json
     raw = response.text.strip()
