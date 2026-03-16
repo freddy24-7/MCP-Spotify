@@ -329,7 +329,7 @@
   <!-- Playlists panel -->
   <div id="panel-playlists" class="tab-panel">
     <div class="field-group">
-      <div class="field-label">Create new playlist</div>
+      <div class="field-label">New blank playlist</div>
       <div id="create-row">
         <input type="text" id="new-playlist-name" placeholder="Playlist name"
                onkeydown="if(event.key==='Enter') createPlaylist()">
@@ -419,7 +419,9 @@
       async callTool(name, args = {}) {
         const result = await this._request('tools/call', { name, arguments: args });
         const text = result?.content?.[0]?.text;
-        return text ? JSON.parse(text) : result;
+        if (!text) return result;
+        if (result?.isError) throw new Error(text);
+        try { return JSON.parse(text); } catch { throw new Error(text); }
       }
       close() { this._es && this._es.close(); }
     }
@@ -542,7 +544,10 @@
         const r = await callTool('get_user_playlists', { limit: 50 });
         renderPlaylists(r.playlists || []);
         populateSelect(r.playlists || []);
-      } catch (_) { /* silent */ }
+      } catch (e) {
+        document.getElementById('playlist-list').innerHTML =
+          '<div class="empty">Could not load playlists: ' + e.message + '</div>';
+      }
     }
 
     function renderPlaylists(items) {
