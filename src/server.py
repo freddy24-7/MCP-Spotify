@@ -794,7 +794,7 @@ def generate_playlist(prompt: str, playlist_name: str = "") -> dict[str, Any]:
 
     log.info("generate_playlist: calling Gemini for prompt=%r", prompt)
     response = ai_client.models.generate_content(
-        model="gemini-2.5-flash-lite-preview-06-17",
+        model="gemini-2.5-flash",
         contents=user_msg,
     )
 
