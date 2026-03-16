@@ -14,7 +14,7 @@ import os
 import sys
 from typing import Any
 
-import anthropic
+import google.generativeai as genai
 import spotipy
 from fastmcp import FastMCP
 from spotipy.oauth2 import SpotifyOAuth
@@ -769,40 +769,35 @@ def generate_playlist(prompt: str, playlist_name: str = "") -> dict[str, Any]:
     Raises
     ------
     EnvironmentError
-        If ``ANTHROPIC_API_KEY`` is not configured.
+        If ``GEMINI_API_KEY`` is not configured.
     ValueError
         If ``prompt`` is blank.
     """
     if not prompt.strip():
         raise ValueError("prompt must not be blank.")
-    if not settings.anthropic_api_key:
+    if not settings.gemini_api_key:
         raise EnvironmentError(
-            "ANTHROPIC_API_KEY is not set. Add it to Railway environment variables."
+            "GEMINI_API_KEY is not set. Add it to Railway environment variables."
         )
 
-    ai = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+    genai.configure(api_key=settings.gemini_api_key)
+    model = genai.GenerativeModel("gemini-1.5-flash")
 
-    system = (
-        "You are a music curator. When given a playlist prompt you return ONLY "
-        "a JSON object with two keys:\n"
-        '  "name": a short playlist name (if not supplied by the user)\n'
+    user_msg = (
+        "You are a music curator. Return ONLY a JSON object with two keys:\n"
+        '  "name": a short playlist name\n'
         '  "tracks": an array of objects, each with "title" and "artist"\n'
-        "No markdown, no explanation — raw JSON only."
+        "No markdown, no explanation — raw JSON only.\n\n"
+        f'Prompt: "{prompt.strip()}"'
     )
-    user_msg = f'Prompt: "{prompt.strip()}"\n'
     if playlist_name.strip():
-        user_msg += f'Playlist name: "{playlist_name.strip()}"'
+        user_msg += f'\nPlaylist name: "{playlist_name.strip()}"'
 
-    log.info("generate_playlist: calling Claude for prompt=%r", prompt)
-    message = ai.messages.create(
-        model="claude-haiku-4-5-20251001",
-        max_tokens=1024,
-        system=system,
-        messages=[{"role": "user", "content": user_msg}],
-    )
+    log.info("generate_playlist: calling Gemini for prompt=%r", prompt)
+    response = model.generate_content(user_msg)
 
     import json as _json
-    raw = message.content[0].text.strip()
+    raw = response.text.strip()
     # Strip markdown code fences if present
     if raw.startswith("```"):
         raw = raw.split("\n", 1)[1].rsplit("```", 1)[0].strip()

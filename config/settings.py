@@ -62,11 +62,11 @@ class Settings(BaseSettings):
     )
 
     # ------------------------------------------------------------------
-    # Anthropic (AI playlist generation)
+    # Google Gemini (AI playlist generation)
     # ------------------------------------------------------------------
-    anthropic_api_key: str = Field(
+    gemini_api_key: str = Field(
         default="",
-        description="Anthropic API key for AI-powered playlist generation.",
+        description="Google Gemini API key for AI-powered playlist generation.",
     )
 
     # ------------------------------------------------------------------
