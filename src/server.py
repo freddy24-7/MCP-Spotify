@@ -488,27 +488,18 @@ def get_user_playlists(limit: int = 20, offset: int = 0) -> dict[str, Any]:
     sp = get_spotify_client()
     result = sp.current_user_playlists(limit=limit, offset=offset)
 
-    playlists = []
-    for p in result.get("items", []):
-        if not p:
-            continue
-        # Spotify's simplified playlist object no longer reliably includes
-        # tracks.total, so fetch it via the tracks pagination endpoint.
-        try:
-            page = sp.playlist_tracks(p["id"], limit=1, fields="total")
-            tracks_total = page.get("total") or 0
-            log.info("playlist %r: tracks_total=%r", p.get("name"), tracks_total)
-        except Exception as exc:
-            log.warning("playlist %r: failed to fetch tracks_total: %s", p.get("name"), exc)
-            tracks_total = 0
-        playlists.append({
+    playlists = [
+        {
             "id": p["id"],
             "name": p["name"],
             "owner": (p.get("owner") or {}).get("display_name", ""),
-            "tracks_total": tracks_total,
+            "tracks_total": (p.get("tracks") or {}).get("total", 0),
             "public": p.get("public"),
             "url": (p.get("external_urls") or {}).get("spotify", ""),
-        })
+        }
+        for p in result.get("items", [])
+        if p
+    ]
 
     log.info("get_user_playlists: returned %d playlist(s)", len(playlists))
     return {
