@@ -313,35 +313,91 @@
   <!-- Toast -->
   <div id="toast"></div>
 
-  <script type="module">
-    import { Client }           from 'https://esm.sh/@modelcontextprotocol/sdk@1.27.1/client/index.js';
-    import { SSEClientTransport } from 'https://esm.sh/@modelcontextprotocol/sdk@1.27.1/client/sse.js';
+  <script>
+    // ── Lightweight MCP-over-SSE client (no SDK dependency) ────────────────
+    // Implements the MCP SSE transport spec:
+    //   1. GET /mcp  → SSE stream; server emits an 'endpoint' event with POST URL
+    //   2. POST to that URL with JSON-RPC 2.0 messages
+    //   3. Responses arrive as 'message' SSE events on the same stream
+    class MCPClient {
+      constructor(sseUrl) {
+        this._sseUrl  = sseUrl;
+        this._postUrl = null;
+        this._es      = null;
+        this._pending = new Map();
+        this._id      = 0;
+      }
+      connect() {
+        return new Promise((resolve, reject) => {
+          const t = setTimeout(() => reject(new Error('SSE connect timeout')), 10000);
+          this._es = new EventSource(this._sseUrl);
+          this._es.addEventListener('endpoint', async (e) => {
+            clearTimeout(t);
+            this._postUrl = new URL(e.data, window.location.origin).href;
+            try {
+              await this._request('initialize', {
+                protocolVersion: '2024-11-05',
+                capabilities: {},
+                clientInfo: { name: 'spotify-web-app', version: '1.0.0' }
+              });
+              this._post({ jsonrpc: '2.0', method: 'notifications/initialized', params: {} });
+              resolve();
+            } catch (err) { reject(err); }
+          });
+          this._es.addEventListener('message', (e) => {
+            try {
+              const msg = JSON.parse(e.data);
+              if (msg.id != null && this._pending.has(msg.id)) {
+                const { res, rej } = this._pending.get(msg.id);
+                this._pending.delete(msg.id);
+                msg.error ? rej(new Error(msg.error.message || JSON.stringify(msg.error))) : res(msg.result);
+              }
+            } catch (_) {}
+          });
+          this._es.onerror = () => { clearTimeout(t); reject(new Error('SSE error')); };
+        });
+      }
+      _request(method, params) {
+        const id = ++this._id;
+        return new Promise((res, rej) => {
+          const t = setTimeout(() => { this._pending.delete(id); rej(new Error('Timeout: ' + method)); }, 15000);
+          this._pending.set(id, {
+            res: (r) => { clearTimeout(t); res(r); },
+            rej: (e) => { clearTimeout(t); rej(e); }
+          });
+          this._post({ jsonrpc: '2.0', id, method, params });
+        });
+      }
+      async _post(body) {
+        await fetch(this._postUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        });
+      }
+      async callTool(name, args = {}) {
+        const result = await this._request('tools/call', { name, arguments: args });
+        const text = result?.content?.[0]?.text;
+        return text ? JSON.parse(text) : result;
+      }
+      close() { this._es && this._es.close(); }
+    }
 
     // ── State ──────────────────────────────────────────────────────────────
     let client        = null;
     let currentUri    = null;
     let refreshTimer  = null;
 
-    // ── MCP helpers ────────────────────────────────────────────────────────
-    async function callTool(name, args = {}) {
-      if (!client) throw new Error('Not connected');
-      const res = await client.callTool({ name, arguments: args });
-      const text = res?.content?.[0]?.text;
-      return text ? JSON.parse(text) : res;
-    }
-
     async function connect() {
       setStatus('Connecting…', 'pending');
       try {
-        const url = new URL('/mcp', window.location.origin);
-        const transport = new SSEClientTransport(url);
-        client = new Client({ name: 'spotify-web-app', version: '1.0.0' }, { capabilities: {} });
-        await client.connect(transport);
+        client = new MCPClient(window.location.origin + '/mcp');
+        await client.connect();
         setStatus('Connected', 'connected');
         await Promise.all([refreshNowPlaying(), loadPlaylists()]);
         startRefresh();
       } catch (err) {
-        setStatus('Connection failed — ' + err.message, 'error');
+        setStatus('Failed — ' + err.message, 'error');
         client = null;
       }
     }
@@ -384,7 +440,7 @@
     }
 
     // ── Playback controls ─────────────────────────────────────────────────
-    window.togglePlay = async function () {
+    async function togglePlay() {
       try {
         const r = await callTool('play_pause', { action: 'toggle' });
         document.getElementById('btn-playpause').textContent =
@@ -394,7 +450,7 @@
       } catch (e) { toast('Error: ' + e.message, 'error'); }
     };
 
-    window.skip = async function (direction) {
+    async function skip(direction) {
       try {
         await callTool('skip_track', { direction });
         toast('⏭ Skipped ' + direction, 'success');
@@ -402,7 +458,7 @@
       } catch (e) { toast('Error: ' + e.message, 'error'); }
     };
 
-    window.queueCurrent = async function () {
+    async function queueCurrent() {
       if (!currentUri) { toast('Nothing is playing', 'error'); return; }
       try {
         await callTool('add_to_queue', { uri: currentUri });
@@ -411,7 +467,7 @@
     };
 
     // ── Search & Add ──────────────────────────────────────────────────────
-    window.searchAndAdd = async function () {
+    async function searchAndAdd() {
       const query = document.getElementById('search-input').value.trim();
       const pid   = document.getElementById('playlist-select').value;
       if (!query) { toast('Enter a search query', 'error'); return; }
@@ -467,7 +523,7 @@
       if (cur) sel.value = cur;
     }
 
-    window.createPlaylist = async function () {
+    async function createPlaylist() {
       const name = document.getElementById('new-playlist-name').value.trim();
       if (!name) { toast('Enter a playlist name', 'error'); return; }
       const btn = document.getElementById('btn-create');
@@ -485,7 +541,7 @@
     };
 
     // ── UI helpers ────────────────────────────────────────────────────────
-    window.showTab = function (name) {
+    function showTab(name) {
       document.querySelectorAll('.tab-btn').forEach((b, i) =>
         b.classList.toggle('active', ['search','playlists'][i] === name));
       document.querySelectorAll('.tab-panel').forEach(p =>
@@ -493,7 +549,7 @@
       if (name === 'playlists') loadPlaylists();
     };
 
-    window.reconnect = async function () {
+    async function reconnect() {
       clearInterval(refreshTimer);
       client = null;
       await connect();
