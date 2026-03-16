@@ -132,6 +132,17 @@ async def health_check(request: Request) -> JSONResponse:
     return JSONResponse({"status": "ok", "service": settings.server_name})
 
 
+@mcp.custom_route("/app", methods=["GET"])
+async def serve_web_app(request: Request) -> HTMLResponse:
+    """Serve the mobile web app."""
+    static_path = os.path.join(_PROJECT_ROOT, "static", "index.html")
+    try:
+        with open(static_path) as f:
+            return HTMLResponse(f.read())
+    except FileNotFoundError:
+        return HTMLResponse("<h1>Web app not found</h1>", status_code=404)
+
+
 @mcp.custom_route("/auth/login", methods=["GET"])
 async def auth_login(request: Request) -> HTMLResponse | RedirectResponse:
     """

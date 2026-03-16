@@ -1,0 +1,534 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="theme-color" content="#121212">
+  <title>Spotify MCP</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --green: #1db954;
+      --bg: #121212;
+      --surface: #1a1a1a;
+      --surface2: #242424;
+      --text: #ffffff;
+      --muted: #b3b3b3;
+      --dim: #535353;
+      --radius: 12px;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      max-width: 480px;
+      margin: 0 auto;
+    }
+
+    /* ── Status bar ── */
+    #status-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 16px;
+      font-size: 12px;
+      color: var(--muted);
+      border-bottom: 1px solid #2a2a2a;
+      min-height: 40px;
+    }
+    #status-dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: var(--dim);
+      margin-right: 6px;
+      flex-shrink: 0;
+      transition: background .3s;
+    }
+    #status-dot.connected { background: var(--green); }
+    #status-dot.error     { background: #e22134; }
+    #status-text { flex: 1; }
+    #btn-reconnect {
+      background: none; border: 1px solid var(--dim);
+      color: var(--muted); border-radius: 20px;
+      padding: 4px 10px; font-size: 11px; cursor: pointer;
+    }
+    #btn-reconnect:hover { border-color: var(--muted); color: var(--text); }
+
+    /* ── Now Playing ── */
+    #now-playing {
+      padding: 20px 16px 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 14px;
+    }
+    #art-wrap {
+      width: 100%;
+      max-width: 280px;
+      aspect-ratio: 1;
+      border-radius: 16px;
+      overflow: hidden;
+      background: var(--surface2);
+      box-shadow: 0 8px 32px rgba(0,0,0,.5);
+    }
+    #art-wrap img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    #art-placeholder {
+      width: 100%; height: 100%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 64px;
+    }
+    #track-info { width: 100%; text-align: center; }
+    #track-name  { font-size: 20px; font-weight: 700; margin-bottom: 4px; line-height: 1.2; }
+    #track-artist { font-size: 14px; color: var(--muted); }
+    #track-album  { font-size: 12px; color: var(--dim); margin-top: 2px; }
+
+    /* ── Progress bar ── */
+    #progress-wrap { width: 100%; }
+    #progress-bar {
+      width: 100%; height: 4px;
+      background: var(--surface2);
+      border-radius: 2px;
+      overflow: hidden;
+      margin-bottom: 4px;
+    }
+    #progress-fill {
+      height: 100%;
+      background: var(--green);
+      width: 0%;
+      transition: width .5s linear;
+    }
+    #progress-times {
+      display: flex;
+      justify-content: space-between;
+      font-size: 11px;
+      color: var(--dim);
+    }
+
+    /* ── Controls ── */
+    #controls {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      width: 100%;
+      padding: 4px 0;
+    }
+    .ctrl-btn {
+      background: none; border: none; cursor: pointer;
+      color: var(--text); border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      transition: opacity .15s, transform .1s;
+      padding: 0;
+    }
+    .ctrl-btn:hover  { opacity: .8; }
+    .ctrl-btn:active { transform: scale(.93); }
+    .ctrl-btn:disabled { opacity: .3; cursor: default; }
+    .ctrl-btn.sm { width: 44px; height: 44px; font-size: 22px; }
+    .ctrl-btn.lg {
+      width: 60px; height: 60px; font-size: 28px;
+      background: var(--green); border-radius: 50%;
+    }
+    .ctrl-btn.lg:hover { background: #1ed760; opacity: 1; }
+    .ctrl-btn.queue-btn {
+      width: 44px; height: 44px; font-size: 18px;
+      border: 1.5px solid var(--dim); border-radius: 10px;
+    }
+
+    /* ── Tabs ── */
+    #tabs {
+      display: flex;
+      border-bottom: 1px solid #2a2a2a;
+      margin-top: 20px;
+    }
+    .tab-btn {
+      flex: 1; padding: 12px 8px;
+      background: none; border: none;
+      color: var(--muted); font-size: 14px; font-weight: 600;
+      cursor: pointer; border-bottom: 2px solid transparent;
+      transition: color .2s, border-color .2s;
+    }
+    .tab-btn.active { color: var(--text); border-bottom-color: var(--green); }
+
+    /* ── Tab panels ── */
+    .tab-panel { display: none; padding: 16px; flex: 1; }
+    .tab-panel.active { display: block; }
+
+    /* ── Search panel ── */
+    .field-label { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+    .field-group { margin-bottom: 14px; }
+    input[type=text], select {
+      width: 100%; padding: 12px 14px;
+      background: var(--surface2); border: 1px solid #333;
+      border-radius: var(--radius); color: var(--text);
+      font-size: 15px; outline: none;
+      transition: border-color .2s;
+    }
+    input[type=text]:focus, select:focus { border-color: var(--green); }
+    select option { background: var(--surface2); }
+    .action-btn {
+      width: 100%; padding: 14px;
+      background: var(--green); border: none; border-radius: var(--radius);
+      color: #fff; font-size: 15px; font-weight: 700;
+      cursor: pointer; transition: background .2s, opacity .2s;
+    }
+    .action-btn:hover    { background: #1ed760; }
+    .action-btn:disabled { opacity: .4; cursor: default; }
+    .action-btn.secondary {
+      background: var(--surface2);
+      border: 1px solid #444;
+    }
+    .action-btn.secondary:hover { background: #2e2e2e; }
+
+    #search-result {
+      margin-top: 14px; padding: 12px 14px;
+      background: var(--surface2); border-radius: var(--radius);
+      font-size: 13px; display: none;
+    }
+    #search-result .res-track  { font-weight: 600; }
+    #search-result .res-artist { color: var(--muted); font-size: 12px; }
+    #search-result .res-status { color: var(--green); font-size: 12px; margin-top: 4px; }
+
+    /* ── Playlists panel ── */
+    #create-row { display: flex; gap: 8px; margin-bottom: 16px; }
+    #create-row input { flex: 1; }
+    #btn-create {
+      padding: 0 16px; background: var(--green); border: none;
+      border-radius: var(--radius); color: #fff;
+      font-weight: 700; font-size: 14px; cursor: pointer;
+      white-space: nowrap;
+    }
+    #btn-create:hover { background: #1ed760; }
+
+    #playlist-list { display: flex; flex-direction: column; gap: 8px; }
+    .playlist-item {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 12px 14px;
+      background: var(--surface2); border-radius: var(--radius);
+    }
+    .pl-name  { font-size: 14px; font-weight: 600; }
+    .pl-count { font-size: 12px; color: var(--muted); margin-top: 2px; }
+    #playlist-list .empty { color: var(--dim); font-size: 14px; text-align: center; padding: 20px 0; }
+
+    /* ── Toast ── */
+    #toast {
+      position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%) translateY(80px);
+      background: #333; color: #fff;
+      padding: 10px 20px; border-radius: 24px;
+      font-size: 14px; font-weight: 500;
+      transition: transform .3s ease;
+      pointer-events: none; white-space: nowrap;
+      max-width: calc(100vw - 32px);
+      text-overflow: ellipsis; overflow: hidden;
+      z-index: 100;
+    }
+    #toast.show { transform: translateX(-50%) translateY(0); }
+    #toast.success { background: #1a3d2b; border: 1px solid var(--green); color: var(--green); }
+    #toast.error   { background: #3d1a1a; border: 1px solid #e22134; color: #e22134; }
+  </style>
+</head>
+<body>
+
+  <!-- Status bar -->
+  <div id="status-bar">
+    <div style="display:flex;align-items:center;gap:6px">
+      <div id="status-dot"></div>
+      <span id="status-text">Connecting…</span>
+    </div>
+    <button id="btn-reconnect" onclick="reconnect()">Reconnect</button>
+  </div>
+
+  <!-- Now Playing -->
+  <div id="now-playing">
+    <div id="art-wrap">
+      <div id="art-placeholder">🎵</div>
+    </div>
+    <div id="track-info">
+      <div id="track-name">—</div>
+      <div id="track-artist"></div>
+      <div id="track-album"></div>
+    </div>
+    <div id="progress-wrap">
+      <div id="progress-bar"><div id="progress-fill"></div></div>
+      <div id="progress-times">
+        <span id="prog-current">0:00</span>
+        <span id="prog-total">0:00</span>
+      </div>
+    </div>
+    <div id="controls">
+      <button class="ctrl-btn sm" onclick="skip('previous')" title="Previous">⏮</button>
+      <button class="ctrl-btn lg" id="btn-playpause" onclick="togglePlay()" title="Play/Pause">▶</button>
+      <button class="ctrl-btn sm" onclick="skip('next')" title="Next">⏭</button>
+      <button class="ctrl-btn sm queue-btn" onclick="queueCurrent()" title="Queue current track">＋</button>
+    </div>
+  </div>
+
+  <!-- Tabs -->
+  <div id="tabs">
+    <button class="tab-btn active" onclick="showTab('search')">Search &amp; Add</button>
+    <button class="tab-btn" onclick="showTab('playlists')">Playlists</button>
+  </div>
+
+  <!-- Search panel -->
+  <div id="panel-search" class="tab-panel active">
+    <div class="field-group">
+      <div class="field-label">Track / artist / album</div>
+      <input type="text" id="search-input" placeholder="e.g. Numb Linkin Park"
+             onkeydown="if(event.key==='Enter') searchAndAdd()">
+    </div>
+    <div class="field-group">
+      <div class="field-label">Add to playlist</div>
+      <select id="playlist-select">
+        <option value="">— select a playlist —</option>
+      </select>
+    </div>
+    <button class="action-btn" onclick="searchAndAdd()">Search &amp; Add to Playlist</button>
+    <div id="search-result">
+      <div class="res-track"  id="res-track"></div>
+      <div class="res-artist" id="res-artist"></div>
+      <div class="res-status" id="res-status"></div>
+    </div>
+  </div>
+
+  <!-- Playlists panel -->
+  <div id="panel-playlists" class="tab-panel">
+    <div class="field-group">
+      <div class="field-label">Create new playlist</div>
+      <div id="create-row">
+        <input type="text" id="new-playlist-name" placeholder="Playlist name"
+               onkeydown="if(event.key==='Enter') createPlaylist()">
+        <button id="btn-create" onclick="createPlaylist()">Create</button>
+      </div>
+    </div>
+    <div class="field-label" style="margin-bottom:8px">Your playlists</div>
+    <div id="playlist-list"><div class="empty">Loading…</div></div>
+  </div>
+
+  <!-- Toast -->
+  <div id="toast"></div>
+
+  <script type="module">
+    import { Client }           from 'https://esm.sh/@modelcontextprotocol/sdk@1.27.1/client/index.js';
+    import { SSEClientTransport } from 'https://esm.sh/@modelcontextprotocol/sdk@1.27.1/client/sse.js';
+
+    // ── State ──────────────────────────────────────────────────────────────
+    let client        = null;
+    let currentUri    = null;
+    let refreshTimer  = null;
+
+    // ── MCP helpers ────────────────────────────────────────────────────────
+    async function callTool(name, args = {}) {
+      if (!client) throw new Error('Not connected');
+      const res = await client.callTool({ name, arguments: args });
+      const text = res?.content?.[0]?.text;
+      return text ? JSON.parse(text) : res;
+    }
+
+    async function connect() {
+      setStatus('Connecting…', 'pending');
+      try {
+        const url = new URL('/mcp', window.location.origin);
+        const transport = new SSEClientTransport(url);
+        client = new Client({ name: 'spotify-web-app', version: '1.0.0' }, { capabilities: {} });
+        await client.connect(transport);
+        setStatus('Connected', 'connected');
+        await Promise.all([refreshNowPlaying(), loadPlaylists()]);
+        startRefresh();
+      } catch (err) {
+        setStatus('Connection failed — ' + err.message, 'error');
+        client = null;
+      }
+    }
+
+    function startRefresh() {
+      clearInterval(refreshTimer);
+      refreshTimer = setInterval(refreshNowPlaying, 5000);
+    }
+
+    // ── Now Playing ────────────────────────────────────────────────────────
+    async function refreshNowPlaying() {
+      try {
+        const data = await callTool('get_current_track');
+        updateNowPlaying(data);
+      } catch (_) { /* silent — keep showing last state */ }
+    }
+
+    function updateNowPlaying(d) {
+      if (!d || !d.is_playing && !d.track_name) {
+        document.getElementById('track-name').textContent   = 'Nothing playing';
+        document.getElementById('track-artist').textContent = '';
+        document.getElementById('track-album').textContent  = '';
+        document.getElementById('btn-playpause').textContent = '▶';
+        document.getElementById('progress-fill').style.width = '0%';
+        currentUri = null;
+        return;
+      }
+
+      currentUri = d.track_uri || null;
+      document.getElementById('track-name').textContent   = d.track_name   || '—';
+      document.getElementById('track-artist').textContent = (d.artists || []).join(', ');
+      document.getElementById('track-album').textContent  = d.album  || '';
+      document.getElementById('btn-playpause').textContent = d.is_playing ? '⏸' : '▶';
+
+      // Progress
+      const pct = d.duration_ms ? (d.progress_ms / d.duration_ms) * 100 : 0;
+      document.getElementById('progress-fill').style.width = pct + '%';
+      document.getElementById('prog-current').textContent = fmtMs(d.progress_ms || 0);
+      document.getElementById('prog-total').textContent   = fmtMs(d.duration_ms || 0);
+    }
+
+    // ── Playback controls ─────────────────────────────────────────────────
+    window.togglePlay = async function () {
+      try {
+        const r = await callTool('play_pause', { action: 'toggle' });
+        document.getElementById('btn-playpause').textContent =
+          r.status === 'playing' ? '⏸' : '▶';
+        toast('✓ ' + (r.status === 'playing' ? 'Playing' : 'Paused'), 'success');
+        setTimeout(refreshNowPlaying, 500);
+      } catch (e) { toast('Error: ' + e.message, 'error'); }
+    };
+
+    window.skip = async function (direction) {
+      try {
+        await callTool('skip_track', { direction });
+        toast('⏭ Skipped ' + direction, 'success');
+        setTimeout(refreshNowPlaying, 800);
+      } catch (e) { toast('Error: ' + e.message, 'error'); }
+    };
+
+    window.queueCurrent = async function () {
+      if (!currentUri) { toast('Nothing is playing', 'error'); return; }
+      try {
+        await callTool('add_to_queue', { uri: currentUri });
+        toast('＋ Added to queue', 'success');
+      } catch (e) { toast('Error: ' + e.message, 'error'); }
+    };
+
+    // ── Search & Add ──────────────────────────────────────────────────────
+    window.searchAndAdd = async function () {
+      const query = document.getElementById('search-input').value.trim();
+      const pid   = document.getElementById('playlist-select').value;
+      if (!query) { toast('Enter a search query', 'error'); return; }
+      if (!pid)   { toast('Select a playlist', 'error'); return; }
+
+      const btn = document.querySelector('#panel-search .action-btn');
+      btn.disabled = true; btn.textContent = 'Searching…';
+      try {
+        const r = await callTool('search_and_add', { query, playlist_id: pid });
+        document.getElementById('res-track').textContent  = r.track_name;
+        document.getElementById('res-artist').textContent = (r.artists || []).join(', ');
+        document.getElementById('res-status').textContent = '✓ Added to playlist';
+        document.getElementById('search-result').style.display = 'block';
+        document.getElementById('search-input').value = '';
+        toast('✓ Added "' + r.track_name + '"', 'success');
+      } catch (e) {
+        toast('Error: ' + e.message, 'error');
+      } finally {
+        btn.disabled = false; btn.textContent = 'Search & Add to Playlist';
+      }
+    };
+
+    // ── Playlists ─────────────────────────────────────────────────────────
+    async function loadPlaylists() {
+      try {
+        const r = await callTool('get_user_playlists', { limit: 50 });
+        renderPlaylists(r.playlists || []);
+        populateSelect(r.playlists || []);
+      } catch (_) { /* silent */ }
+    }
+
+    function renderPlaylists(items) {
+      const el = document.getElementById('playlist-list');
+      if (!items.length) {
+        el.innerHTML = '<div class="empty">No playlists found</div>';
+        return;
+      }
+      el.innerHTML = items.map(p => `
+        <div class="playlist-item">
+          <div>
+            <div class="pl-name">${esc(p.name)}</div>
+            <div class="pl-count">${p.tracks_total} tracks</div>
+          </div>
+        </div>
+      `).join('');
+    }
+
+    function populateSelect(items) {
+      const sel = document.getElementById('playlist-select');
+      const cur = sel.value;
+      sel.innerHTML = '<option value="">— select a playlist —</option>' +
+        items.map(p => `<option value="${esc(p.id)}">${esc(p.name)}</option>`).join('');
+      if (cur) sel.value = cur;
+    }
+
+    window.createPlaylist = async function () {
+      const name = document.getElementById('new-playlist-name').value.trim();
+      if (!name) { toast('Enter a playlist name', 'error'); return; }
+      const btn = document.getElementById('btn-create');
+      btn.disabled = true; btn.textContent = '…';
+      try {
+        const r = await callTool('create_playlist', { name });
+        toast('✓ Created "' + r.name + '"', 'success');
+        document.getElementById('new-playlist-name').value = '';
+        await loadPlaylists();
+      } catch (e) {
+        toast('Error: ' + e.message, 'error');
+      } finally {
+        btn.disabled = false; btn.textContent = 'Create';
+      }
+    };
+
+    // ── UI helpers ────────────────────────────────────────────────────────
+    window.showTab = function (name) {
+      document.querySelectorAll('.tab-btn').forEach((b, i) =>
+        b.classList.toggle('active', ['search','playlists'][i] === name));
+      document.querySelectorAll('.tab-panel').forEach(p =>
+        p.classList.toggle('active', p.id === 'panel-' + name));
+      if (name === 'playlists') loadPlaylists();
+    };
+
+    window.reconnect = async function () {
+      clearInterval(refreshTimer);
+      client = null;
+      await connect();
+    };
+
+    function setStatus(msg, state) {
+      document.getElementById('status-text').textContent = msg;
+      const dot = document.getElementById('status-dot');
+      dot.className = '';
+      if (state === 'connected') dot.classList.add('connected');
+      if (state === 'error')     dot.classList.add('error');
+    }
+
+    let toastTimer;
+    function toast(msg, type = '') {
+      const el = document.getElementById('toast');
+      el.textContent = msg;
+      el.className   = 'show ' + type;
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => { el.className = ''; }, 3000);
+    }
+
+    function fmtMs(ms) {
+      const s = Math.floor(ms / 1000);
+      return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+    }
+
+    function esc(s) {
+      return String(s)
+        .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+        .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    }
+
+    // ── Boot ──────────────────────────────────────────────────────────────
+    connect();
+  </script>
+</body>
+</html>
