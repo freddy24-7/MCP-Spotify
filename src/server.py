@@ -109,6 +109,15 @@ def _uri_to_id(uri_or_id: str) -> str:
     return uri_or_id.split(":")[-1] if ":" in uri_or_id else uri_or_id
 
 
+def _active_device_id(sp: spotipy.Spotify) -> str | None:
+    """Return the ID of the active device, or the first available one."""
+    devices = sp.devices().get("devices", [])
+    if not devices:
+        return None
+    active = next((d for d in devices if d.get("is_active")), None)
+    return (active or devices[0])["id"]
+
+
 # ---------------------------------------------------------------------------
 # FastMCP server
 # ---------------------------------------------------------------------------
@@ -307,8 +316,9 @@ def play_pause(action: str = "toggle") -> dict[str, str]:
         action = "pause" if currently_playing else "play"
 
     if action == "play":
-        sp.start_playback()
-        log.info("play_pause: playback started")
+        device_id = _active_device_id(sp)
+        sp.start_playback(device_id=device_id)
+        log.info("play_pause: playback started on device=%s", device_id)
         return {"status": "playing"}
     else:
         sp.pause_playback()
@@ -708,8 +718,11 @@ def play_context(context_uri: str) -> dict[str, str]:
         context_uri = f"spotify:playlist:{context_uri}"
 
     sp = get_spotify_client()
-    sp.start_playback(context_uri=context_uri)
-    log.info("play_context: started %s", context_uri)
+    device_id = _active_device_id(sp)
+    if not device_id:
+        raise ValueError("No Spotify device available. Open Spotify on any device first.")
+    sp.start_playback(device_id=device_id, context_uri=context_uri)
+    log.info("play_context: started %s on device=%s", context_uri, device_id)
     return {"status": "playing", "context_uri": context_uri}
 
 
