@@ -493,11 +493,13 @@ def get_user_playlists(limit: int = 20, offset: int = 0) -> dict[str, Any]:
         if not p:
             continue
         # Spotify's simplified playlist object no longer reliably includes
-        # tracks.total, so fetch it directly from the full playlist endpoint.
+        # tracks.total, so fetch it via the tracks pagination endpoint.
         try:
-            full = sp.playlist(p["id"], fields="tracks.total")
-            tracks_total = (full.get("tracks") or {}).get("total") or 0
-        except Exception:
+            page = sp.playlist_tracks(p["id"], limit=1, fields="total")
+            tracks_total = page.get("total") or 0
+            log.info("playlist %r: tracks_total=%r", p.get("name"), tracks_total)
+        except Exception as exc:
+            log.warning("playlist %r: failed to fetch tracks_total: %s", p.get("name"), exc)
             tracks_total = 0
         playlists.append({
             "id": p["id"],
@@ -729,7 +731,11 @@ def play_context(context_uri: str) -> dict[str, str]:
     device_id = _active_device_id(sp)
     if not device_id:
         raise ValueError("No Spotify device available. Open Spotify on any device first.")
-    sp.start_playback(device_id=device_id, context_uri=context_uri)
+    try:
+        sp.start_playback(device_id=device_id, context_uri=context_uri)
+    except spotipy.SpotifyException:
+        # Device may have gone inactive; retry without a specific device ID
+        sp.start_playback(context_uri=context_uri)
     log.info("play_context: started %s on device=%s", context_uri, device_id)
     return {"status": "playing", "context_uri": context_uri}
 
