@@ -482,10 +482,10 @@ def get_user_playlists(limit: int = 20, offset: int = 0) -> dict[str, Any]:
         {
             "id": p["id"],
             "name": p["name"],
-            "owner": p["owner"]["display_name"],
-            "tracks_total": p["tracks"]["total"],
+            "owner": (p.get("owner") or {}).get("display_name", ""),
+            "tracks_total": (p.get("tracks") or {}).get("total", 0),
             "public": p.get("public"),
-            "url": p["external_urls"]["spotify"],
+            "url": (p.get("external_urls") or {}).get("spotify", ""),
         }
         for p in result.get("items", [])
     ]
