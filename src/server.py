@@ -492,12 +492,13 @@ def get_user_playlists(limit: int = 20, offset: int = 0) -> dict[str, Any]:
     for p in result.get("items", []):
         if not p:
             continue
-        tracks_field = p.get("tracks")
-        tracks_total = (tracks_field or {}).get("total") or 0
-        log.info(
-            "playlist %r: tracks_field=%r → tracks_total=%r",
-            p.get("name"), tracks_field, tracks_total,
-        )
+        # Spotify's simplified playlist object no longer reliably includes
+        # tracks.total, so fetch it directly from the full playlist endpoint.
+        try:
+            full = sp.playlist(p["id"], fields="tracks.total")
+            tracks_total = (full.get("tracks") or {}).get("total") or 0
+        except Exception:
+            tracks_total = 0
         playlists.append({
             "id": p["id"],
             "name": p["name"],
