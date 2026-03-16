@@ -26,4 +26,4 @@ ENV PYTHONUNBUFFERED=1
 
 EXPOSE $PORT
 
-CMD ["uv", "run", "fastmcp", "run", "src/server.py", "--transport", "sse", "--port", "$PORT"]
+CMD sh -c "uv run fastmcp run src/server.py --transport sse --port ${PORT}"
