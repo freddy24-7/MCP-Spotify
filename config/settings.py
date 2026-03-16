@@ -62,6 +62,14 @@ class Settings(BaseSettings):
     )
 
     # ------------------------------------------------------------------
+    # Anthropic (AI playlist generation)
+    # ------------------------------------------------------------------
+    anthropic_api_key: str = Field(
+        default="",
+        description="Anthropic API key for AI-powered playlist generation.",
+    )
+
+    # ------------------------------------------------------------------
     # Multi-user
     # ------------------------------------------------------------------
     current_user_name: str = Field(

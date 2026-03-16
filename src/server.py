@@ -14,6 +14,7 @@ import os
 import sys
 from typing import Any
 
+import anthropic
 import spotipy
 from fastmcp import FastMCP
 from spotipy.oauth2 import SpotifyOAuth
@@ -676,6 +677,135 @@ def switch_user(name: str) -> dict[str, str]:
     _current_user = target
     log.info("switch_user: %s → %s", previous, target)
     return {"previous_user": previous, "current_user": _current_user}
+
+
+# ---------------------------------------------------------------------------
+# Playback context tool
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+def play_context(context_uri: str) -> dict[str, str]:
+    """
+    Start playback of a Spotify context (playlist, album, or artist).
+
+    Parameters
+    ----------
+    context_uri : str
+        Spotify URI (e.g. ``spotify:playlist:<id>``) or bare playlist ID.
+
+    Returns
+    -------
+    dict
+        ``{"status": "playing", "context_uri": str}``
+
+    Raises
+    ------
+    spotipy.SpotifyException
+        Propagated if the Spotify API returns a non-2xx response.
+    """
+    if ":" not in context_uri:
+        context_uri = f"spotify:playlist:{context_uri}"
+
+    sp = get_spotify_client()
+    sp.start_playback(context_uri=context_uri)
+    log.info("play_context: started %s", context_uri)
+    return {"status": "playing", "context_uri": context_uri}
+
+
+# ---------------------------------------------------------------------------
+# AI playlist generation tool
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+def generate_playlist(prompt: str, playlist_name: str = "") -> dict[str, Any]:
+    """
+    Generate and populate a Spotify playlist from a natural-language prompt.
+
+    Uses Claude to interpret the prompt and produce a tracklist, then
+    creates a new playlist and searches for each track on Spotify.
+
+    Parameters
+    ----------
+    prompt : str
+        Natural-language description, e.g. ``"10 summer hits from 2024"``.
+    playlist_name : str, optional
+        Name for the new playlist.  If omitted, Claude will suggest one.
+
+    Returns
+    -------
+    dict
+        Keys: ``playlist_id``, ``playlist_name``, ``playlist_url``,
+        ``tracks_added`` (int), ``tracks_not_found`` (list[str]).
+
+    Raises
+    ------
+    EnvironmentError
+        If ``ANTHROPIC_API_KEY`` is not configured.
+    ValueError
+        If ``prompt`` is blank.
+    """
+    if not prompt.strip():
+        raise ValueError("prompt must not be blank.")
+    if not settings.anthropic_api_key:
+        raise EnvironmentError(
+            "ANTHROPIC_API_KEY is not set. Add it to Railway environment variables."
+        )
+
+    ai = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+
+    system = (
+        "You are a music curator. When given a playlist prompt you return ONLY "
+        "a JSON object with two keys:\n"
+        '  "name": a short playlist name (if not supplied by the user)\n'
+        '  "tracks": an array of objects, each with "title" and "artist"\n'
+        "No markdown, no explanation — raw JSON only."
+    )
+    user_msg = f'Prompt: "{prompt.strip()}"\n'
+    if playlist_name.strip():
+        user_msg += f'Playlist name: "{playlist_name.strip()}"'
+
+    log.info("generate_playlist: calling Claude for prompt=%r", prompt)
+    message = ai.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=1024,
+        system=system,
+        messages=[{"role": "user", "content": user_msg}],
+    )
+
+    import json as _json
+    raw = message.content[0].text.strip()
+    # Strip markdown code fences if present
+    if raw.startswith("```"):
+        raw = raw.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+    data = _json.loads(raw)
+
+    final_name = playlist_name.strip() or data.get("name", prompt[:50])
+    sp = get_spotify_client()
+    playlist = sp.current_user_playlist_create(name=final_name, public=False)
+    pid = playlist["id"]
+
+    added, not_found = [], []
+    for t in data.get("tracks", []):
+        query = f"{t.get('title', '')} {t.get('artist', '')}".strip()
+        results = sp.search(q=query, type="track", limit=1)
+        items = results.get("tracks", {}).get("items", [])
+        if items:
+            sp.playlist_add_items(pid, [items[0]["uri"]])
+            added.append(items[0]["name"])
+            log.info("generate_playlist: added '%s'", items[0]["name"])
+        else:
+            not_found.append(query)
+            log.warning("generate_playlist: not found '%s'", query)
+
+    return {
+        "playlist_id": pid,
+        "playlist_name": final_name,
+        "playlist_url": playlist["external_urls"]["spotify"],
+        "tracks_added": len(added),
+        "tracks_not_found": not_found,
+    }
 
 
 # ---------------------------------------------------------------------------

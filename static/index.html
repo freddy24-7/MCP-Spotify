@@ -215,6 +215,36 @@
     .pl-name  { font-size: 14px; font-weight: 600; }
     .pl-count { font-size: 12px; color: var(--muted); margin-top: 2px; }
     #playlist-list .empty { color: var(--dim); font-size: 14px; text-align: center; padding: 20px 0; }
+    .pl-play-btn {
+      background: var(--green); border: none; border-radius: 50%;
+      width: 36px; height: 36px; font-size: 14px;
+      color: #fff; cursor: pointer; flex-shrink: 0;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .pl-play-btn:hover { background: #1ed760; }
+
+    /* ── AI Generate ── */
+    #ai-section {
+      margin-top: 20px; padding-top: 16px;
+      border-top: 1px solid #2a2a2a;
+    }
+    #ai-section .field-label { margin-bottom: 6px; }
+    #ai-prompt {
+      width: 100%; padding: 12px 14px;
+      background: var(--surface2); border: 1px solid #333;
+      border-radius: var(--radius); color: var(--text);
+      font-size: 15px; outline: none; resize: none;
+      min-height: 80px; font-family: inherit;
+      transition: border-color .2s;
+    }
+    #ai-prompt:focus { border-color: var(--green); }
+    #ai-result {
+      margin-top: 12px; padding: 12px 14px;
+      background: var(--surface2); border-radius: var(--radius);
+      font-size: 13px; display: none;
+    }
+    #ai-result .ai-title  { font-weight: 700; color: var(--green); margin-bottom: 4px; }
+    #ai-result .ai-detail { color: var(--muted); }
 
     /* ── Toast ── */
     #toast {
@@ -308,6 +338,17 @@
     </div>
     <div class="field-label" style="margin-bottom:8px">Your playlists</div>
     <div id="playlist-list"><div class="empty">Loading…</div></div>
+
+    <!-- AI Generate -->
+    <div id="ai-section">
+      <div class="field-label">✨ Generate playlist with AI</div>
+      <textarea id="ai-prompt" placeholder="e.g. 10 summer hits from 2024, or relaxing jazz for a rainy evening"></textarea>
+      <button class="action-btn" style="margin-top:10px" onclick="generatePlaylist()">Generate Playlist</button>
+      <div id="ai-result">
+        <div class="ai-title"  id="ai-title"></div>
+        <div class="ai-detail" id="ai-detail"></div>
+      </div>
+    </div>
   </div>
 
   <!-- Toast -->
@@ -516,8 +557,40 @@
             <div class="pl-name">${esc(p.name)}</div>
             <div class="pl-count">${p.tracks_total} tracks</div>
           </div>
+          <button class="pl-play-btn" onclick="playPlaylist('${esc(p.id)}')" title="Play">▶</button>
         </div>
       `).join('');
+    }
+
+    async function playPlaylist(id) {
+      try {
+        await callTool('play_context', { context_uri: id });
+        toast('▶ Playing playlist', 'success');
+        setTimeout(refreshNowPlaying, 800);
+      } catch (e) { toast('Error: ' + e.message, 'error'); }
+    }
+
+    async function generatePlaylist() {
+      const prompt = document.getElementById('ai-prompt').value.trim();
+      if (!prompt) { toast('Enter a prompt', 'error'); return; }
+      const btn = document.querySelector('#ai-section .action-btn');
+      btn.disabled = true; btn.textContent = '✨ Generating…';
+      document.getElementById('ai-result').style.display = 'none';
+      try {
+        const r = await callTool('generate_playlist', { prompt });
+        document.getElementById('ai-title').textContent  = '✓ ' + r.playlist_name;
+        document.getElementById('ai-detail').textContent =
+          r.tracks_added + ' tracks added' +
+          (r.tracks_not_found.length ? ` (${r.tracks_not_found.length} not found)` : '');
+        document.getElementById('ai-result').style.display = 'block';
+        document.getElementById('ai-prompt').value = '';
+        toast('✓ Playlist created!', 'success');
+        await loadPlaylists();
+      } catch (e) {
+        toast('Error: ' + e.message, 'error');
+      } finally {
+        btn.disabled = false; btn.textContent = 'Generate Playlist';
+      }
     }
 
     function populateSelect(items) {
