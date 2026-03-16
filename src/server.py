@@ -133,18 +133,25 @@ async def health_check(request: Request) -> JSONResponse:
 
 
 @mcp.custom_route("/auth/login", methods=["GET"])
-async def auth_login(request: Request) -> RedirectResponse:
+async def auth_login(request: Request) -> HTMLResponse | RedirectResponse:
     """
     Start the Spotify OAuth flow.
 
     Visit this URL in a browser to authorise the server.  Spotify will
     redirect back to ``/callback`` with an authorisation code.
     """
-    user = request.query_params.get("user", _current_user)
-    auth_manager = _build_auth_manager(user)
-    auth_url = auth_manager.get_authorize_url()
-    log.info("auth_login: redirecting user=%s to Spotify", user)
-    return RedirectResponse(url=auth_url)
+    try:
+        user = request.query_params.get("user", _current_user)
+        auth_manager = _build_auth_manager(user)
+        auth_url = auth_manager.get_authorize_url()
+        log.info("auth_login: redirecting user=%s to Spotify", user)
+        return RedirectResponse(url=auth_url)
+    except Exception as exc:
+        log.exception("auth_login failed")
+        return HTMLResponse(
+            f"<h2>Configuration error</h2><pre>{exc}</pre>",
+            status_code=500,
+        )
 
 
 @mcp.custom_route("/callback", methods=["GET"])
