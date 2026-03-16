@@ -401,7 +401,10 @@
         return data.result;
       }
       _notify(method, params) {
-        const headers = { 'Content-Type': 'application/json' };
+        const headers = {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json, text/event-stream'
+        };
         if (this._sessionId) headers['Mcp-Session-Id'] = this._sessionId;
         fetch(this._url, {
           method: 'POST', headers,

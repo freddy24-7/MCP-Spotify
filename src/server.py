@@ -488,17 +488,24 @@ def get_user_playlists(limit: int = 20, offset: int = 0) -> dict[str, Any]:
     sp = get_spotify_client()
     result = sp.current_user_playlists(limit=limit, offset=offset)
 
-    playlists = [
-        {
+    playlists = []
+    for p in result.get("items", []):
+        if not p:
+            continue
+        tracks_field = p.get("tracks")
+        tracks_total = (tracks_field or {}).get("total") or 0
+        log.info(
+            "playlist %r: tracks_field=%r → tracks_total=%r",
+            p.get("name"), tracks_field, tracks_total,
+        )
+        playlists.append({
             "id": p["id"],
             "name": p["name"],
             "owner": (p.get("owner") or {}).get("display_name", ""),
-            "tracks_total": (p.get("tracks") or {}).get("total") or 0,
+            "tracks_total": tracks_total,
             "public": p.get("public"),
             "url": (p.get("external_urls") or {}).get("spotify", ""),
-        }
-        for p in result.get("items", [])
-    ]
+        })
 
     log.info("get_user_playlists: returned %d playlist(s)", len(playlists))
     return {
