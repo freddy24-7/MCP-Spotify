@@ -780,7 +780,10 @@ def generate_playlist(prompt: str, playlist_name: str = "") -> dict[str, Any]:
             "GEMINI_API_KEY is not set. Add it to Railway environment variables."
         )
 
-    client = google_genai.Client(api_key=settings.gemini_api_key)
+    client = google_genai.Client(
+        api_key=settings.gemini_api_key,
+        http_options={"api_version": "v1"},
+    )
 
     user_msg = (
         "You are a music curator. Return ONLY a JSON object with two keys:\n"
