@@ -554,7 +554,7 @@
         <div class="playlist-item">
           <div>
             <div class="pl-name">${esc(p.name)}</div>
-            <div class="pl-count">${p.tracks_total} tracks</div>
+            ${p.tracks_total ? `<div class="pl-count">${p.tracks_total} tracks</div>` : ''}
           </div>
           <button class="pl-play-btn" onclick="playPlaylist('${esc(p.id)}')" title="Play">▶</button>
         </div>
