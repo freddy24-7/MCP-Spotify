@@ -239,6 +239,64 @@ async def auth_callback(request: Request) -> HTMLResponse:
 
 
 @mcp.tool()
+def get_devices() -> dict[str, Any]:
+    """
+    List all available Spotify playback devices for the current user.
+
+    Returns
+    -------
+    dict
+        Keys: ``devices`` (list of dicts with ``id``, ``name``, ``type``,
+        ``is_active``, ``volume_percent``).
+    """
+    sp = get_spotify_client()
+    raw = sp.devices().get("devices", [])
+    devices = [
+        {
+            "id": d["id"],
+            "name": d["name"],
+            "type": d["type"],
+            "is_active": d.get("is_active", False),
+            "volume_percent": d.get("volume_percent"),
+        }
+        for d in raw
+    ]
+    log.info("get_devices: found %d device(s)", len(devices))
+    return {"devices": devices}
+
+
+@mcp.tool()
+def transfer_playback(device_id: str) -> dict[str, str]:
+    """
+    Transfer Spotify playback to a specific device.
+
+    Parameters
+    ----------
+    device_id : str
+        The Spotify device ID to transfer playback to.
+
+    Returns
+    -------
+    dict
+        ``{"status": "transferred", "device_id": str}``
+
+    Raises
+    ------
+    ValueError
+        If ``device_id`` is blank.
+    spotipy.SpotifyException
+        Propagated if the Spotify API returns a non-2xx response.
+    """
+    if not device_id.strip():
+        raise ValueError("device_id must not be blank.")
+    sp = get_spotify_client()
+    sp.transfer_playback(device_id=device_id, force_play=True)
+    log.info("transfer_playback: transferred to device=%s", device_id)
+    return {"status": "transferred", "device_id": device_id}
+
+
+
+@mcp.tool()
 def get_current_track() -> dict[str, Any]:
     """
     Retrieve information about the track currently playing on Spotify.
@@ -275,6 +333,7 @@ def get_current_track() -> dict[str, Any]:
         "progress_ms": playback.get("progress_ms"),
         "track_url": item.get("external_urls", {}).get("spotify"),
         "track_uri": item.get("uri"),
+        "device_name": (playback.get("device") or {}).get("name"),
     }
 
 
